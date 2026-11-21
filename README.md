@@ -2,6 +2,8 @@
 
 An educational, Windows-friendly chatbot for asking questions about uploaded PDF, TXT, and DOCX documents. It uses local Ollama, FAISS, BM25, Reciprocal Rank Fusion (RRF), and Cross-Encoder reranking.
 
+The current version runs a Dockerized Streamlit frontend and FastAPI backend. It supports document upload, extraction, section-aware chunking, embeddings, and FAISS vector search. BM25, reranking, and Ollama answer generation are planned next.
+
 ## What the application will do
 
 1. Upload a PDF, TXT, or DOCX file.
@@ -18,26 +20,20 @@ An educational, Windows-friendly chatbot for asking questions about uploaded PDF
 ## Architecture
 
 ```text
-Document Upload
-      |
-      v
-PDF / TXT / DOCX Loader
-      |
-      v
-Text Cleaning -> Chunking -> Metadata
-      |
-      +--> FAISS Vector Search
-      |
-      +--> BM25 Keyword Search
-      |
-      v
-RRF Hybrid Merge -> Cross-Encoder Rerank
-      |
-      v
-Relevant Context -> Ollama LLM
-      |
-      v
-Grounded Answer + Source and Page
+Browser
+   |
+   v
+Streamlit frontend (port 8501)
+   | HTTP requests on Docker's internal network
+   v
+FastAPI backend (port 8000)
+   |
+   +--> Upload, extraction, section chunking
+   +--> Sentence Transformer embeddings
+   +--> FAISS vector search
+   |
+   v
+Persistent upload and index folders
 ```
 
 This is the ingestion and retrieval pipeline:
@@ -49,7 +45,7 @@ This is the ingestion and retrieval pipeline:
 - **Cross-Encoder:** compares each retrieved chunk against the question again to improve ordering.
 - **Ollama:** runs the answer-generation model locally.
 
-The Streamlit interface lives in `frontend/`; document processing and retrieval code live in `backend/`. Neo4j is not enabled in the baseline. It can be added later for graph questions about relationships between components in an architecture document; FAISS and BM25 remain the baseline search.
+The Streamlit interface lives in `frontend/`; document processing and retrieval code plus the HTTP API live in `backend/`. Neo4j is not enabled in the baseline. It can be added later for graph questions about relationships between components in an architecture document.
 
 For architecture PDFs with recognized headings, search terms such as `frontend` and `backend` are scoped to their matching sections. Full-text and all-chunk views remain available under the collapsed ingestion details panel.
 
@@ -58,12 +54,19 @@ For architecture PDFs with recognized headings, search terms such as `frontend` 
 ```text
 bot_offline/
 |-- frontend/
-|   `-- app.py
+|   |-- app.py
+|   |-- Dockerfile
+|   `-- requirements.txt
 |-- backend/
+|   |-- api.py
+|   |-- Dockerfile
+|   |-- requirements.txt
 |   |-- ingestion/
 |   |-- retrieval/
 |   |-- generation/   (later phase)
 |   `-- pipeline/     (later phase)
+|-- compose.yaml
+|-- .dockerignore
 |-- requirements.txt
 |-- README.md
 |-- .env.example
@@ -75,121 +78,74 @@ bot_offline/
 `-- logs/
 ```
 
-The folder structure will be created only when each implementation phase requires it.
-
 The `generation/` and `pipeline/` backend folders are reserved for later phases; they will receive code when those components are implemented.
 
 ## Windows prerequisites
 
-Install:
+For Docker:
 
-- Python 3.11 or 3.12
-- Visual Studio Code
-- Git
-- Ollama
+- Docker Desktop for Windows with Linux containers enabled
 
-Check the tools:
+For local development, Python 3.12, Visual Studio Code, and Git are also useful. Ollama is only needed when answer generation is implemented.
 
-```powershell
-py -3 --version
-git --version
-ollama --version
+## Run with Docker
+
+Docker Desktop for Windows should be running with Linux containers enabled.
+
+Build and start both containers from the project root:
+
+```text
+docker compose up --build
 ```
 
-## Phase 1: Environment setup
+Open the frontend at [http://localhost:8501](http://localhost:8501). The backend API documentation is available at [http://localhost:8000/docs](http://localhost:8000/docs).
 
-Open VS Code in this project folder, then open a PowerShell terminal.
+The Compose setup keeps uploaded documents and FAISS index files in `data/uploads/` and `data/indexes/`, and caches the embedding model between runs. The backend is available to the frontend over the internal Docker network; both published ports bind to localhost.
 
-### 1. Create a virtual environment
+The currently processed document is kept in backend memory. After restarting the backend container, upload and process the document again; its uploaded file remains in `data/uploads/`.
+
+Stop the containers with `Ctrl+C`, or run:
+
+```text
+docker compose down
+```
+
+## Run locally without Docker
+
+Install the development dependencies and activate the virtual environment:
 
 ```powershell
 py -3 -m venv .venv
-```
-
-### 2. Activate it
-
-```powershell
 .\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 ```
 
-If PowerShell blocks activation, allow it for the current process:
+Run the backend in one terminal:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\.venv\Scripts\Activate.ps1
+python -m uvicorn backend.api:app --host 127.0.0.1 --port 8000
 ```
 
-The terminal should now begin with `(.venv)`.
-
-### 3. Confirm Python
-
-```powershell
-python --version
-python -m pip --version
-```
-
-Both commands must run successfully.
-
-### 4. Install Ollama and its model
-
-Download and install Ollama for Windows, then run:
-
-```powershell
-ollama pull llama3.2
-ollama list
-```
-
-Start Ollama:
-
-```powershell
-ollama serve
-```
-
-Keep this terminal running while using the chatbot.
-
-### 5. Configure environment variables
-
-Copy [.env.example](.env.example) to `.env`:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Do not commit `.env`; it is intended for local configuration.
-
-## Implementation roadmap
-
-The project is developed in separate confirmed stages:
-
-1. Environment and project setup
-2. Streamlit document upload
-3. PDF, TXT, and DOCX ingestion
-4. Text cleaning and chunking
-5. Embeddings
-6. FAISS vector retrieval
-7. BM25 keyword retrieval
-8. RRF hybrid retrieval
-9. Cross-Encoder reranking
-10. Ollama answer generation
-11. Source citations and no-answer handling
-12. Chat interface
-13. Automated tests
-14. Final review
-
-No application code is created until the setup phase is confirmed.
-
-## Quick testing commands
-
-After dependencies and tests are added in later phases:
-
-```powershell
-pytest -q
-```
-
-Run the Streamlit application from the project root:
+Run the frontend in a second terminal:
 
 ```powershell
 python -m streamlit run frontend/app.py
+```
+
+## Ollama (later phase)
+
+Ollama answer generation is not connected yet. When it is added, keep Ollama on Windows initially and configure the backend to use `http://host.docker.internal:11434` from Docker.
+
+## Implementation roadmap
+
+The frontend and backend Docker containers currently support document processing and FAISS vector search. Next development stages are BM25 retrieval, RRF hybrid search, Cross-Encoder reranking, Ollama answer generation, citations, and a chat interface.
+
+## Quick testing commands
+
+Run the tests from the project root:
+
+```powershell
+python -m pytest -q
 ```
 
 ## Common setup errors
